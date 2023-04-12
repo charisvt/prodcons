@@ -229,5 +229,5 @@ void *sin_wrapper (void *arg){
   
   *(sin_args->result) = sin(sin_args->angle);
   
-  return;
+  return NULL;
 }
