@@ -148,13 +148,15 @@ void *consumer (void *q)
     pthread_cond_broadcast (fifo->notFull);
 
     // call the function
-    void *result = wf.work(wf.arg);
-    
+    wf.work(wf.arg);
+
+
     // Print the result
-    printf("consumer: sin(%f) = %f\n", ((SinArgs *)wf.arg)->angle, *(float *)result);
+    printf("consumer: sin(%f) = %f\n", ((SinArgs *)wf.arg)->angle, *(((SinArgs *)wf.arg)->result));
+
 
     // Free the memory
-    free(result); // DEBUG - freeing this memory as we promised in producer thread
+    free(((SinArgs *)wf.arg)->result); // DEBUG - freeing this memory as we promised in producer thread
     free(wf.arg); // DEBUG - freeing this memory as we promised in producer thread
 
   }
