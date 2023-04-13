@@ -7,12 +7,15 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <sys/time.h>
+#include <time.h>
+#include <errno.h>
 #include <math.h>
 
 #define QUEUESIZE 10
 #define LOOP 2000
 #define p 3 // number of producer threads
 #define qt 2 // number of consumer threads
+#define CONSUMER_TIMEOUT 20 // seconds
 
 void *producer (void *args);
 void *consumer (void *args);
@@ -21,6 +24,7 @@ void *consumer (void *args);
 typedef struct workFunction {
   void * (*work)(void *);
   void * arg;
+  struct timeval timestamp;
 } workFunction;
 
 typedef struct {
@@ -75,16 +79,30 @@ int main ()
     pthread_join (producers[i], NULL);
   }
 
+  struct timeval total_waiting_time;
+  timerclear(&total_waiting_time);
+  
   // Join q consumer threads
   for (i = 0; i < qt; i++) {
-    pthread_join (consumers[i], NULL);
+    void *consumer_result;
+    pthread_join (consumers[i], &consumer_result);
+
+    // Merge the waiting times
+    struct timeval *consumer_waiting_time = (struct timeval *)consumer_result;
+    timeradd(&total_waiting_time, consumer_waiting_time, &total_waiting_time);
+
+    free(consumer_waiting_time);
   }
+  
+  printf("Average waiting time: %f ms\n", ((total_waiting_time.tv_sec * 1e3) + (total_waiting_time.tv_usec / 1e3)) / (LOOP * p));
 
   queueDelete (fifo);
 
   // Free the memory allocated for producer and consumer thread arrays
   free(producers);
   free(consumers);
+
+  // Print results
 
   return 0;
 }
@@ -114,6 +132,7 @@ void *producer(void *q) {
 
     wf.work = sin_wrapper;
     wf.arg = sin_args;
+    gettimeofday(&(wf.timestamp), NULL);
 
     queueAdd(fifo, wf);
     // unlock the mutex
@@ -125,43 +144,83 @@ void *producer(void *q) {
 }
 
 
-void *consumer (void *q)
-{
+void *consumer(void *q) {
   queue *fifo;
   workFunction wf;
+  struct timeval total_waiting_time;
+
+  // Initialize the total_waiting_time to zero
+  timerclear(&total_waiting_time);
 
   fifo = (queue *)q;
 
   while (1) {
-    // lock the mutex
-    pthread_mutex_lock (fifo->mut);
+    // Lock the mutex
+    pthread_mutex_lock(fifo->mut);
+
+    int timed_out = 0;
+
     while (fifo->empty) {
-      printf ("consumer: queue EMPTY.\n");
-      pthread_cond_wait (fifo->notEmpty, fifo->mut);
+      printf("consumer: queue EMPTY.\n");
+
+      // Calculate the timeout point
+      struct timespec timeout;
+      clock_gettime(CLOCK_MONOTONIC, &timeout);
+      timeout.tv_sec += CONSUMER_TIMEOUT;
+
+      // Wait with a timeout
+      int ret = pthread_cond_timedwait(fifo->notEmpty, fifo->mut, &timeout);
+
+      // Check for a timeout
+      if (ret == ETIMEDOUT) {
+        printf("consumer: TIMEOUT. Terminating...\n");
+        timed_out = 1;
+        break;
+      }
     }
-    // wait till the queue is not empty
-    // remove the item from the queue
-    queueDel (fifo, &wf);
-    // unlock the mutex
-    pthread_mutex_unlock (fifo->mut);
-    // broadcast signal
-    pthread_cond_broadcast (fifo->notFull);
 
-    // call the function
+    // If not timed_out, dequeue the item from the queue
+    if (!timed_out) {
+      queueDel(fifo, &wf);
+    }
+
+    // Unlock the mutex
+    pthread_mutex_unlock(fifo->mut);
+
+    // Exit the loop if timed_out
+    if (timed_out) {
+      break;
+    }
+
+    // Broadcast signal
+    pthread_cond_broadcast(fifo->notFull);
+
+    // Calculate the waiting time
+    struct timeval now, waiting_time;
+    gettimeofday(&now, NULL);
+    timersub(&now, &(wf.timestamp), &waiting_time);
+
+    // Accumulate the waiting time
+    timeradd(&total_waiting_time, &waiting_time, &total_waiting_time);
+
+    // Call the function
     wf.work(wf.arg);
-
 
     // Print the result
     printf("consumer: sin(%f) = %f\n", ((SinArgs *)wf.arg)->angle, *(((SinArgs *)wf.arg)->result));
 
-
     // Free the memory
     free(((SinArgs *)wf.arg)->result); // DEBUG - freeing this memory as we promised in producer thread
-    free(wf.arg); // DEBUG - freeing this memory as we promised in producer thread
-
+    free(wf.arg);                       // DEBUG - freeing this memory as we promised in producer thread
   }
-  return (NULL);
+
+  // Return the accumulated waiting time as a pointer to a dynamically allocated timeval struct
+  struct timeval *result = (struct timeval *)malloc(sizeof(struct timeval));
+  *result = total_waiting_time;
+  return (void *)result;
 }
+
+
 
 
 queue *queueInit (void)
