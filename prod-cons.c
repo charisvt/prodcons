@@ -13,9 +13,8 @@
 
 #define QUEUESIZE 10
 #define LOOP 2000
-#define p 3 // number of producer threads
-#define qt 2 // number of consumer threads
-#define CONSUMER_TIMEOUT 20 // seconds
+#define p 5 // number of producer threads
+//#define qt 2 // number of consumer threads
 
 void *producer (void *args);
 void *consumer (void *args);
@@ -46,8 +45,16 @@ void queueAdd (queue *q, workFunction in);
 void queueDel (queue *q, workFunction *out);
 void *sin_wrapper (void *arg);
 
-int main ()
+int main (int argc, char *argv[])
 {
+  if (argc != 2) {
+    fprintf(stderr, "Usage: %s <qt>\n", argv[0]);
+    exit(1);
+  }
+
+  // Convert the argument to an integer
+  int qt = atoi(argv[1]);
+
   int i;
   queue *fifo;
   // Allocate memory for producer and consumer thread arrays
@@ -79,6 +86,15 @@ int main ()
     pthread_join (producers[i], NULL);
   }
 
+  // Create sentinel work item
+  workFunction sentinel = {.work = NULL, .arg = NULL};
+
+  // Enqueue sentinel work item
+  pthread_mutex_lock(fifo->mut);
+  queueAdd(fifo, sentinel);
+  pthread_mutex_unlock(fifo->mut);
+  pthread_cond_broadcast(fifo->notEmpty);
+
   struct timeval total_waiting_time;
   timerclear(&total_waiting_time);
   
@@ -94,7 +110,9 @@ int main ()
     free(consumer_waiting_time);
   }
   
-  printf("Average waiting time: %f ms\n", ((total_waiting_time.tv_sec * 1e3) + (total_waiting_time.tv_usec / 1e3)) / (LOOP * p));
+  //printf("Average waiting time: %f ms\n", ((total_waiting_time.tv_sec * 1e3) + (total_waiting_time.tv_usec / 1e3)) / (LOOP * p));
+  
+  printf("%f", ((total_waiting_time.tv_sec * 1e3) + (total_waiting_time.tv_usec / 1e3)) / (LOOP * p));
 
   queueDelete (fifo);
 
@@ -117,17 +135,16 @@ void *producer(void *q) {
     // lock the mutex
     pthread_mutex_lock(fifo->mut);
     while (fifo->full) {
-      printf("producer: queue FULL.\n");
+      //printf("producer: queue FULL.\n");
       pthread_cond_wait(fifo->notFull, fifo->mut);
     }
     // wait till the queue is not full
     // add the item to the queue
-    // DEBUG: create actual simple function (ie. calc cosine of an angle) and add it to the queue
     workFunction wf;
     SinArgs *sin_args = (SinArgs *)malloc(sizeof(SinArgs)); // DEBUG - free this memory IN THE CONSUMER THREAD !!!
     float *result = (float *)malloc(sizeof(float)); // DEBUG - free this memory IN THE CONSUMER THREAD !!!
 
-    sin_args->angle = i * M_PI / 180.0f;  // Convert i to radians
+    sin_args->angle = M_PI / (fmod((i * 13.0f), 8) + 1.0f);
     sin_args->result = result;
 
     wf.work = sin_wrapper;
@@ -158,39 +175,28 @@ void *consumer(void *q) {
     // Lock the mutex
     pthread_mutex_lock(fifo->mut);
 
-    int timed_out = 0;
-
     while (fifo->empty) {
-      printf("consumer: queue EMPTY.\n");
+      //printf("consumer: queue EMPTY.\n");
+      pthread_cond_wait(fifo->notEmpty, fifo->mut);
 
-      // Calculate the timeout point
-      struct timespec timeout;
-      clock_gettime(CLOCK_MONOTONIC, &timeout);
-      timeout.tv_sec += CONSUMER_TIMEOUT;
-
-      // Wait with a timeout
-      int ret = pthread_cond_timedwait(fifo->notEmpty, fifo->mut, &timeout);
-
-      // Check for a timeout
-      if (ret == ETIMEDOUT) {
-        printf("consumer: TIMEOUT. Terminating...\n");
-        timed_out = 1;
-        break;
-      }
     }
 
-    // If not timed_out, dequeue the item from the queue
-    if (!timed_out) {
-      queueDel(fifo, &wf);
+    // dequeue the item from the queue
+    queueDel(fifo, &wf);
+
+    // check for sentinel value
+    if (wf.work == NULL) {
+      // Re-enqueue the sentinel value
+      queueAdd(fifo, wf);
+      pthread_cond_broadcast(fifo->notEmpty);
+      pthread_mutex_unlock(fifo->mut);
+      break;
     }
 
     // Unlock the mutex
     pthread_mutex_unlock(fifo->mut);
 
-    // Exit the loop if timed_out
-    if (timed_out) {
-      break;
-    }
+    // DEBUG TODO check sentinel value ???
 
     // Broadcast signal
     pthread_cond_broadcast(fifo->notFull);
@@ -207,7 +213,7 @@ void *consumer(void *q) {
     wf.work(wf.arg);
 
     // Print the result
-    printf("consumer: sin(%f) = %f\n", ((SinArgs *)wf.arg)->angle, *(((SinArgs *)wf.arg)->result));
+    //printf("consumer: sin(%f) = %f\n", ((SinArgs *)wf.arg)->angle, *(((SinArgs *)wf.arg)->result));
 
     // Free the memory
     free(((SinArgs *)wf.arg)->result); // DEBUG - freeing this memory as we promised in producer thread
