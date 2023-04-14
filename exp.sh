@@ -1,14 +1,15 @@
 #!/bin/bash
 
 executable="./prod-cons"
-num_runs=500
+num_runs=100
+num_cons=50
 
 # Create an output file for the results
 output_file="results.csv"
 echo "qt,avg_waiting_time" > "${output_file}"
 
 # Loop over the desired qt values
-for qt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+for qt in $(seq 1 ${num_cons}); do
   # Initialize the sum of waiting times
   sum_waiting_time=0
 

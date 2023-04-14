@@ -13,7 +13,7 @@
 
 #define QUEUESIZE 10
 #define LOOP 2000
-#define p 5 // number of producer threads
+#define p 10 // number of producer threads
 //#define qt 2 // number of consumer threads
 
 void *producer (void *args);
