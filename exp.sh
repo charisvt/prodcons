@@ -2,7 +2,7 @@
 
 executable="./prod-cons"
 num_runs=100
-num_cons=50
+num_cons=50 # maximum number of consumers
 
 # Create an output file for the results
 output_file="results.csv"
